@@ -136,6 +136,11 @@ process_message :: (using ctags: *CTags, message: *Message) {
             file_builder: String_Builder;
             for group, filename: group_by_filename {
                 for symbol: group {
+                    // @ToDo: Generate proper byte offset somehow. 
+                    // We just set the byte offset to whatever (69420) because GNU Emacs 
+                    // seems to simply ignore it and just jumps straight to the line. So it's
+                    // not that important. But it would be nice to implement it properly
+                    // at some point.
                     print_to_builder(*section_builder, "%\x7f%,69420\n", symbol.name, symbol.line);
                 }
                 section := builder_to_string(*section_builder);

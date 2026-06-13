@@ -2,14 +2,22 @@
 
 // CTags file format:
 // http://ctags.sourceforge.net/FORMAT
+// ETags file format:
+// https://en.wikipedia.org/wiki/Ctags#etags
 
 // @Incomplete: Missing features
 // * How to we get a polymorphic struct’s parameters?
 // * How can we determine "scope_file" for non-root declarations? (We should probably simply tag all non-global, non-exported declarations as "scope_file")
 // * Add support for Emacs’ etags format? Jon, are you interested in this? (https://en.wikipedia.org/wiki/Ctags#Etags_2)
 
+Format :: enum {
+    CTAGS; // ctags format for vim
+    ETAGS; // etags format for emacs
+}
+
 CTags :: struct {
 	output_filename := "tags";
+    output_format: Format = .CTAGS;
 	base_path: string;
 
 	// If you need to convert the declarations’ paths for some reason
@@ -69,7 +77,7 @@ process_message :: (using ctags: *CTags, message: *Message) {
                 // @ToDo: Include imported members (but we have to get the filename differently for them).
                 if member_decl.flags & .IS_IMPORTED continue; // Do not process imported variables for now.
 
-                // print("Function member: % %\n", it.name, <<cast(*Code_Declaration)it);
+                // print("Function member: % %\n", it.name, cast(*Code_Declaration, it).*);
                 // @ToDo: Somehow get the flags of the header declaration
                 add_symbol(*symbols, filename, it.name, it, .VARIABLE, 0, decl.header.name);
             }
@@ -78,43 +86,64 @@ process_message :: (using ctags: *CTags, message: *Message) {
 	} else if message.kind == .COMPLETE {
 		print("Generating ctags file '%' (% symbols)\n", output_filename, symbols.count);
 
-		intro_sort(symbols, (a: *CTags.Symbol, b: *CTags.Symbol) -> int {
-			return compare(a.name, b.name);
-		});
-
-		// print the symbols in ctags format:
-		builder: String_Builder;
-		for symbols {
-			print_to_builder(*builder, "%\t%\t/\\%%%l\\%%%c/;\"", it.name, it.filename, it.line, it.column);
-			if #complete it.kind == {
-				case .ENUM;
-					print_to_builder(*builder, "\tkind:g");
-				case .ENUM_MEMBER;
-					print_to_builder(*builder, "\tkind:e\tenum:%", it.parent);
-				case .FUNCTION;
-					print_to_builder(*builder, "\tkind:f");
-				case .STRUCT;
-					print_to_builder(*builder, "\tkind:s");
-				case .STRUCT_MEMBER;
-					print_to_builder(*builder, "\tkind:m\tstruct:%", it.parent);
-				case .VARIABLE;
-					print_to_builder(*builder, "\tkind:v");
-                    if it.parent {
-                        print_to_builder(*builder, "\tfunction:%", it.parent);
-                    }
-				case .UNSPECIFIED;
-			}
-
-			if it.arity >= 0 {
-				print_to_builder(*builder, "\tarity:%", it.arity);
-			}
-			if it.scope_file {
-				print_to_builder(*builder, "\tfile:");
-			}
-			print_to_builder(*builder, "\n");
-		}
-
-		write_entire_file(output_filename, builder_to_string(*builder));
+        if #complete output_format == {
+        case .CTAGS;
+		    intro_sort(symbols, (a: *CTags.Symbol, b: *CTags.Symbol) -> int {
+			    return compare(a.name, b.name);
+		    });
+		    // print the symbols in ctags format:
+		    builder: String_Builder;
+		    for symbols {
+		    	print_to_builder(*builder, "%\t%\t/\\\%%l\\\%%c/;\"", it.name, it.filename, it.line, it.column);
+		    	if #complete it.kind == {
+		    		case .ENUM;
+		    			print_to_builder(*builder, "\tkind:g");
+		    		case .ENUM_MEMBER;
+		    			print_to_builder(*builder, "\tkind:e\tenum:%", it.parent);
+		    		case .FUNCTION;
+		    			print_to_builder(*builder, "\tkind:f");
+		    		case .STRUCT;
+		    			print_to_builder(*builder, "\tkind:s");
+		    		case .STRUCT_MEMBER;
+		    			print_to_builder(*builder, "\tkind:m\tstruct:%", it.parent);
+		    		case .VARIABLE;
+		    			print_to_builder(*builder, "\tkind:v");
+                        if it.parent {
+                            print_to_builder(*builder, "\tfunction:%", it.parent);
+                        }
+		    		case .UNSPECIFIED;
+		    	}
+            
+		    	if it.arity >= 0 {
+		    		print_to_builder(*builder, "\tarity:%", it.arity);
+		    	}
+		    	if it.scope_file {
+		    		print_to_builder(*builder, "\tfile:");
+		    	}
+		    	print_to_builder(*builder, "\n");
+		    }
+		    write_entire_file(output_filename, builder_to_string(*builder));
+        case .ETAGS;
+            group_by_filename: Table(string, [..]Symbol);
+		    for symbol: symbols {
+                group := table_find_pointer(*group_by_filename, symbol.filename);
+                if group == null {
+                    group = table_add(*group_by_filename, symbol.filename, [..]Symbol.{});
+                }
+                array_add(group, symbol);
+            }
+            section_builder: String_Builder;
+            file_builder: String_Builder;
+            for group, filename: group_by_filename {
+                for symbol: group {
+                    print_to_builder(*section_builder, "%\x7f%,69420\n", symbol.name, symbol.line);
+                }
+                section := builder_to_string(*section_builder);
+                print_to_builder(*file_builder, "\x0c\n%,%\n", filename, section.count);
+                append(*file_builder, section);
+            }
+		    write_entire_file(output_filename, builder_to_string(*file_builder));
+        }
 	}
 }
 
@@ -176,7 +205,7 @@ add_symbol :: (symbols: *[..] *CTags.Symbol, filename: string, name: string, nod
     symbol.parent = parent;
     symbol.arity = arity;
     symbol.scope_file = cast(bool) flags & .SCOPE_FILE;
-    // print("Adding symbol: %\n", <<symbol);
+    // print("Adding symbol: %\n", symbol.*);
 
     array_add(symbols, symbol);
 }
@@ -186,7 +215,7 @@ add_declaration :: (using ctags: *CTags, decl: *Code_Declaration) {
 
     if !decl.name {
         // @ToDo: What are declarations with no name?
-        print("Found declaration wihout a name: %\n", <<decl);
+        print("Found declaration wihout a name: %\n", decl.*);
         return;
     }
 
@@ -243,7 +272,7 @@ add_declaration :: (using ctags: *CTags, decl: *Code_Declaration) {
                 add_symbol(*symbols, filename, decl.name, decl, .UNSPECIFIED, decl.flags);
         }
     } else {
-        // print("No expression: %\n", <<decl);
+        // print("No expression: %\n", decl.*);
         add_symbol(*symbols, filename, decl.name, decl, .VARIABLE, decl.flags);
     }
 }
@@ -254,4 +283,5 @@ add_declaration :: (using ctags: *CTags, decl: *Code_Declaration) {
 #import "IntroSort";
 #import "File";
 #import "Basic";
+#import "Hash_Table";
 
